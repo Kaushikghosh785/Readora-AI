@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Readora AI — Talk to your documents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: { sora: ['Sora','sans-serif'], sans: ['Inter','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+      colors: { ink: '#090d16', panel: '#0d1220', card: '#101728' }
+    }
+  }
+}
+</script>
+<style>
+  :root{
+    --accent-1:#8b5cf6; --accent-2:#6366f1;
+    --border:rgba(148,163,184,.12);
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; background:#090d16; }
+  body{ overflow:hidden; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px); }
+  ::-webkit-scrollbar{ width:8px; height:8px; }
+  ::-webkit-scrollbar-track{ background:transparent; }
+  ::-webkit-scrollbar-thumb{ background:rgba(148,163,184,.18); border-radius:8px; }
+  ::-webkit-scrollbar-thumb:hover{ background:rgba(148,163,184,.32); }
+
+  .brand-gradient{ background:linear-gradient(135deg,var(--accent-1),var(--accent-2)); }
+  .brand-text{ background:linear-gradient(135deg,#c4b5fd,#a5b4fc); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .glass{ background:rgba(13,18,32,.7); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); }
+  .glow-ring:focus-within{ box-shadow:0 0 0 1px rgba(139,92,246,.5), 0 0 24px -4px rgba(99,102,241,.45); }
+
+  @keyframes fadeUp{ from{ opacity:0; transform:translateY(8px);} to{ opacity:1; transform:translateY(0);} }
+  .msg-in{ animation:fadeUp .32s cubic-bezier(.2,.7,.3,1) both; }
+
+  @keyframes dotPulse{ 0%,80%,100%{ transform:scale(.6); opacity:.4;} 40%{ transform:scale(1); opacity:1;} }
+  .dot{ animation:dotPulse 1.2s infinite ease-in-out; }
+  .dot:nth-child(2){ animation-delay:.15s; }
+  .dot:nth-child(3){ animation-delay:.3s; }
+
+  @keyframes shimmer{ 0%{ background-position:-400px 0;} 100%{ background-position:400px 0;} }
+  .shimmer{ background:linear-gradient(90deg, rgba(148,163,184,.06) 0%, rgba(148,163,184,.16) 50%, rgba(148,163,184,.06) 100%); background-size:400px 100%; animation:shimmer 1.6s infinite linear; }
+
+  @keyframes toastIn{ from{ opacity:0; transform:translateY(10px) scale(.96);} to{ opacity:1; transform:translateY(0) scale(1);} }
+  .toast-in{ animation:toastIn .25s ease both; }
+
+  .cite-pill{ transition:all .15s ease; }
+  .cite-pill:hover{ transform:translateY(-1px); box-shadow:0 4px 12px -2px rgba(99,102,241,.35); }
+
+  .sidebar{ transition:margin-left .28s cubic-bezier(.4,0,.2,1), opacity .2s ease; }
+  .sidebar.collapsed{ margin-left:-300px; opacity:0; pointer-events:none; }
+
+  textarea#composer{ field-sizing:content; }
+
+  .prose-ai{ color:#e2e8f0; line-height:1.65; }
+  .prose-ai p{ margin:.5em 0; }
+  .prose-ai p:first-child{ margin-top:0; } .prose-ai p:last-child{ margin-bottom:0; }
+  .prose-ai ul,.prose-ai ol{ margin:.5em 0; padding-left:1.3em; }
+  .prose-ai li{ margin:.2em 0; }
+  .prose-ai strong{ color:#f1f5f9; font-weight:600; }
+  .prose-ai code{ background:rgba(148,163,184,.14); padding:.1em .4em; border-radius:5px; font-size:.87em; font-family:'JetBrains Mono',monospace; color:#c4b5fd; }
+  .prose-ai pre{ background:#080b14; border:1px solid var(--border); border-radius:10px; padding:0; margin:.7em 0; overflow:hidden; }
+  .prose-ai pre code{ background:none; padding:0; color:#e2e8f0; display:block; padding:14px 16px; overflow-x:auto; font-size:.83em; line-height:1.55; }
+  .prose-ai a{ color:#a5b4fc; text-decoration:underline; text-underline-offset:2px; }
+  .prose-ai h1,.prose-ai h2,.prose-ai h3{ color:#f8fafc; font-weight:700; margin:.7em 0 .35em; }
+  .prose-ai blockquote{ border-left:3px solid var(--accent-2); padding-left:.8em; color:#94a3b8; margin:.6em 0; }
+
+  .code-copy{ opacity:0; transition:opacity .15s; }
+  .code-wrap:hover .code-copy{ opacity:1; }
+
+  input[type=range]{ accent-color:#8b5cf6; }
+  [data-theme="light"]{ display:none; }
+</style>
+</head>
+<body class="font-sans text-slate-100 h-full">
+
+<div class="h-full w-full flex flex-col" style="height:100dvh;">
+
+  <!-- ===== HEADER ===== -->
+  <header class="glass border-b border-white/5 flex items-center justify-between px-3 sm:px-4 h-14 shrink-0 z-30" style="padding-top:env(safe-area-inset-top,0px);">
+    <div class="flex items-center gap-2 sm:gap-3 min-w-0">
+      <button id="sidebarToggle" class="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-slate-100 transition" title="Toggle sidebar">
+        <i data-lucide="panel-left" class="w-4.5 h-4.5" style="width:18px;height:18px;"></i>
+      </button>
+      <div class="flex items-center gap-2 min-w-0">
+        <div class="w-8 h-8 rounded-lg brand-gradient flex items-center justify-center shrink-0 shadow-[0_0_20px_-4px_rgba(139,92,246,.7)]">
+          <i data-lucide="sparkles" class="w-4 h-4 text-white"></i>
+        </div>
+        <div class="min-w-0 leading-tight">
+          <h1 class="font-sora font-bold text-[15px] tracking-tight truncate">Readora <span class="brand-text">AI</span></h1>
+          <p class="text-[10.5px] text-slate-500 -mt-0.5 hidden sm:block">Document intelligence</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-1.5 sm:gap-2">
+      <span class="hidden md:flex items-center gap-1.5 text-[11px] font-medium text-indigo-300 bg-indigo-500/10 border border-indigo-500/25 px-2.5 py-1 rounded-full">
+        <i data-lucide="database" class="w-3 h-3"></i> ChromaDB + RAG v2
+      </span>
+      <button id="pdfToggleBtn" class="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-slate-100 transition" title="Toggle PDF viewer">
+        <i data-lucide="file-text" style="width:17px;height:17px;"></i>
+      </button>
+      <button id="clearChatBtn" class="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-rose-400 transition" title="Clear chat">
+        <i data-lucide="trash-2" style="width:17px;height:17px;"></i>
+      </button>
+      <button id="fullscreenBtn" class="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-slate-100 transition" title="Fullscreen">
+        <i data-lucide="maximize" style="width:17px;height:17px;"></i>
+      </button>
+      <button id="settingsBtn" class="p-2 rounded-lg hover:bg-white/5 text-slate-400 hover:text-slate-100 transition" title="Settings">
+        <i data-lucide="settings-2" style="width:17px;height:17px;"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== BODY: sidebar + main ===== -->
+  <div class="flex-1 flex min-h-0 relative">
+
+    <!-- SIDEBAR -->
+    <aside id="sidebar" class="sidebar w-[280px] shrink-0 border-r border-white/5 bg-[#0b0f1a] flex flex-col min-h-0">
+      <div class="p-3.5 border-b border-white/5">
+        <div class="rounded-xl border border-white/8 bg-gradient-to-br from-white/[.04] to-transparent p-3 hover:border-indigo-500/30 transition cursor-pointer group">
+          <div class="flex gap-3">
+            <div class="w-11 h-14 rounded-md bg-gradient-to-br from-rose-500/20 to-orange-500/10 border border-white/10 flex items-center justify-center shrink-0">
+              <i data-lucide="file-text" class="w-5 h-5 text-rose-300"></i>
+            </div>
+            <div class="min-w-0 flex-1">
+              <p class="text-[13px] font-semibold truncate group-hover:text-indigo-300 transition">GRU.pdf</p>
+              <p class="text-[11px] text-slate-500 mt-0.5">2.4 MB · 18 pages</p>
+              <p class="text-[10.5px] text-slate-600">Uploaded Sep 22, 2026</p>
+            </div>
+          </div>
+          <div class="mt-2.5 flex items-center gap-1.5 text-[10.5px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-1 w-fit">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,.5)]"></span>
+            Vectorized &amp; Ready
+          </div>
+        </div>
+      </div>
+
+      <div class="p-3.5 border-b border-white/5">
+        <div class="relative">
+          <i data-lucide="search" class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2"></i>
+          <input id="topicSearch" type="text" placeholder="Search topics…" class="w-full bg-white/5 border border-white/8 rounded-lg pl-8 pr-3 py-2 text-[12.5px] placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/40 focus:bg-white/[.07] transition">
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto px-3.5 py-3">
+        <p class="text-[10.5px] font-semibold uppercase tracking-wider text-slate-600 mb-2 px-0.5">Key topics</p>
+        <div id="topicList" class="space-y-1"></div>
+      </div>
+
+      <div class="p-3.5 border-t border-white/5 text-[10.5px] text-slate-600 flex items-center gap-1.5">
+        <i data-lucide="shield-check" class="w-3 h-3"></i> Local vector store · private
+      </div>
+    </aside>
+
+    <!-- MAIN CHAT -->
+    <main class="flex-1 min-w-0 flex flex-col relative">
+
+      <!-- messages -->
+      <div id="messages" class="flex-1 overflow-y-auto px-4 sm:px-6">
+        <div id="emptyState" class="h-full flex flex-col items-center justify-center text-center px-4 py-10 max-w-lg mx-auto">
+          <div class="w-14 h-14 rounded-2xl brand-gradient flex items-center justify-center mb-4 shadow-[0_0_40px_-8px_rgba(139,92,246,.6)]">
+            <i data-lucide="message-circle-question" class="w-7 h-7 text-white"></i>
+          </div>
+          <h2 class="font-sora font-bold text-xl mb-1.5">Ask GRU.pdf anything</h2>
+          <p class="text-slate-500 text-[13.5px] mb-6">Readora reads the full document and answers with cited sources.</p>
+          <div id="chips" class="flex flex-wrap gap-2 justify-center"></div>
+        </div>
+        <div id="thread" class="max-w-3xl mx-auto py-5 space-y-5"></div>
+      </div>
+
+      <!-- input deck -->
+      <div class="shrink-0 px-3 sm:px-6 pb-4 pt-2" style="padding-bottom:calc(env(safe-area-inset-bottom,0px) + 14px);">
+        <div class="max-w-3xl mx-auto">
+          <div id="shortcuts" class="flex gap-1.5 mb-2 overflow-x-auto no-scrollbar pb-0.5">
+            <button data-prompt="Summarize the main points of this document." class="shortcut-btn shrink-0 flex items-center gap-1.5 text-[12px] font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/8 rounded-full px-3 py-1.5 transition"><i data-lucide="list" class="w-3 h-3"></i>Summarize</button>
+            <button data-prompt="What are the key insights and conclusions?" class="shortcut-btn shrink-0 flex items-center gap-1.5 text-[12px] font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/8 rounded-full px-3 py-1.5 transition"><i data-lucide="lightbulb" class="w-3 h-3"></i>Key Insights</button>
+            <button data-prompt="Explain the equations in this document step by step." class="shortcut-btn shrink-0 flex items-center gap-1.5 text-[12px] font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/8 rounded-full px-3 py-1.5 transition"><i data-lucide="sigma" class="w-3 h-3"></i>Explain Equations</button>
+          </div>
+
+          <div class="glow-ring flex items-end gap-2 bg-[#11172a] border border-white/10 rounded-3xl px-3 py-2 shadow-[0_8px_30px_-10px_rgba(0,0,0,.6)] transition">
+            <button id="attachBtn" class="p-2 rounded-full text-slate-500 hover:text-slate-200 hover:bg-white/5 transition shrink-0" title="Attach document">
+              <i data-lucide="paperclip" style="width:18px;height:18px;"></i>
+            </button>
+            <textarea id="composer" rows="1" placeholder="Ask about GRU.pdf… (Shift+Enter for a new line)" class="flex-1 bg-transparent resize-none outline-none text-[14px] placeholder:text-slate-600 max-h-40 py-1.5 leading-relaxed"></textarea>
+            <button id="sendBtn" class="w-9 h-9 shrink-0 rounded-full brand-gradient flex items-center justify-center text-white disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 active:scale-95 transition shadow-[0_0_18px_-4px_rgba(99,102,241,.7)]">
+              <i data-lucide="arrow-up" style="width:18px;height:18px;"></i>
+            </button>
+          </div>
+          <p class="text-center text-[10.5px] text-slate-600 mt-2">Readora can make mistakes. Verify important information against the source.</p>
+        </div>
+      </div>
+    </main>
+
+    <!-- PDF VIEWER PANE -->
+    <aside id="pdfPane" class="hidden w-full sm:w-[420px] shrink-0 border-l border-white/5 bg-[#0b0f1a] absolute sm:relative right-0 top-0 h-full flex-col z-20">
+      <div class="flex items-center justify-between px-4 h-12 border-b border-white/5 shrink-0">
+        <span class="text-[12.5px] font-semibold flex items-center gap-1.5"><i data-lucide="file-text" class="w-3.5 h-3.5 text-rose-300"></i>GRU.pdf</span>
+        <button id="pdfCloseBtn" class="p-1.5 rounded-lg hover:bg-white/5 text-slate-400"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+      </div>
+      <div class="flex-1 flex items-center justify-center text-center p-6 text-slate-600 text-[12.5px]">
+        <div>
+          <i data-lucide="file-search" class="w-8 h-8 mx-auto mb-2 opacity-40"></i>
+          PDF preview renders here once a viewer endpoint is connected.
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div id="settingsModal" class="hidden fixed inset-0 z-50 items-center justify-center p-4" style="background:rgba(3,5,10,.6); backdrop-filter:blur(4px);">
+  <div class="glass border border-white/10 rounded-2xl w-full max-w-sm p-5">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-sora font-bold text-[15px]">Settings</h3>
+      <button id="settingsCloseBtn" class="p-1 rounded-lg hover:bg-white/5 text-slate-400"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+    </div>
+    <div class="space-y-4 text-[13px]">
+      <div class="flex items-center justify-between">
+        <span class="text-slate-300">API endpoint</span>
+        <span class="text-slate-500 font-mono text-[11px]">127.0.0.1:8000</span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-slate-300">Retrieval model</span>
+        <span class="text-slate-500 text-[11px]">ChromaDB + RAG v2</span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span class="text-slate-300">Response length</span>
+        <input type="range" min="1" max="3" value="2" class="w-28">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM CLEAR MODAL -->
+<div id="confirmModal" class="hidden fixed inset-0 z-50 items-center justify-center p-4" style="background:rgba(3,5,10,.6); backdrop-filter:blur(4px);">
+  <div class="glass border border-white/10 rounded-2xl w-full max-w-xs p-5 text-center">
+    <div class="w-10 h-10 rounded-full bg-rose-500/15 text-rose-400 flex items-center justify-center mx-auto mb-3">
+      <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+    </div>
+    <h3 class="font-sora font-bold text-[14.5px] mb-1">Clear this conversation?</h3>
+    <p class="text-slate-500 text-[12.5px] mb-4">This can't be undone.</p>
+    <div class="flex gap-2">
+      <button id="confirmCancel" class="flex-1 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-[13px] font-medium transition">Cancel</button>
+      <button id="confirmClear" class="flex-1 py-2 rounded-xl bg-rose-500/90 hover:bg-rose-500 text-[13px] font-medium transition">Clear</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOASTS -->
+<div id="toasts" class="fixed bottom-5 right-5 z-[60] flex flex-col gap-2 items-end" style="padding-bottom:env(safe-area-inset-bottom,0px);"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script>
+/* ===================== Readora AI — app logic ===================== */
+lucide.createIcons();
+
+const API_URL = "http://127.0.0.1:8000/api/chat";
+
+const els = {
+  messages: document.getElementById('messages'),
+  thread: document.getElementById('thread'),
+  emptyState: document.getElementById('emptyState'),
+  chips: document.getElementById('chips'),
+  composer: document.getElementById('composer'),
+  sendBtn: document.getElementById('sendBtn'),
+  sidebar: document.getElementById('sidebar'),
+  sidebarToggle: document.getElementById('sidebarToggle'),
+  pdfPane: document.getElementById('pdfPane'),
+  pdfToggleBtn: document.getElementById('pdfToggleBtn'),
+  pdfCloseBtn: document.getElementById('pdfCloseBtn'),
+  clearChatBtn: document.getElementById('clearChatBtn'),
+  confirmModal: document.getElementById('confirmModal'),
+  confirmCancel: document.getElementById('confirmCancel'),
+  confirmClear: document.getElementById('confirmClear'),
+  settingsBtn: document.getElementById('settingsBtn'),
+  settingsModal: document.getElementById('settingsModal'),
+  settingsCloseBtn: document.getElementById('settingsCloseBtn'),
+  fullscreenBtn: document.getElementById('fullscreenBtn'),
+  toasts: document.getElementById('toasts'),
+  topicSearch: document.getElementById('topicSearch'),
+  topicList: document.getElementById('topicList'),
+};
+
+const SUGGESTED_CHIPS = [
+  "Summarize main points", "Extract key conclusions", "List math formulations", "What datasets were used?"
+];
+const TOPICS = [
+  { label: "Introduction", page: 1 }, { label: "GRU Architecture", page: 3 },
+  { label: "Gate Equations", page: 5 }, { label: "Training Setup", page: 9 },
+  { label: "Results & Benchmarks", page: 12 }, { label: "Conclusion", page: 17 },
+];
+
+function renderChips(){
+  els.chips.innerHTML = SUGGESTED_CHIPS.map(c =>
+    `<button class="chip-btn text-[12.5px] font-medium text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/25 rounded-full px-3.5 py-1.5 transition hover:-translate-y-0.5" data-prompt="${c}">${c}</button>`
+  ).join('');
+  els.chips.querySelectorAll('.chip-btn').forEach(b => b.addEventListener('click', () => sendMessage(b.dataset.prompt)));
+}
+function renderTopics(filter=''){
+  const f = filter.toLowerCase();
+  els.topicList.innerHTML = TOPICS.filter(t => t.label.toLowerCase().includes(f)).map(t =>
+    `<button class="w-full flex items-center justify-between text-left px-2.5 py-1.5 rounded-lg hover:bg-white/5 text-[12.5px] text-slate-400 hover:text-slate-100 transition group">
+      <span class="truncate">${t.label}</span>
+      <span class="text-[10px] text-slate-600 group-hover:text-indigo-300 shrink-0 ml-2">p.${t.page}</span>
+    </button>`).join('') || `<p class="text-[12px] text-slate-600 px-1 py-2">No topics match.</p>`;
+}
+renderChips(); renderTopics();
+els.topicSearch.addEventListener('input', e => renderTopics(e.target.value));
+document.querySelectorAll('.shortcut-btn').forEach(b => b.addEventListener('click', () => sendMessage(b.dataset.prompt)));
+
+/* ---------- textarea autoresize ---------- */
+function autoResize(){
+  els.composer.style.height = 'auto';
+  els.composer.style.height = Math.min(els.composer.scrollHeight, 160) + 'px';
+  els.sendBtn.disabled = els.composer.value.trim().length === 0;
+}
+els.composer.addEventListener('input', autoResize);
+els.composer.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
+});
+els.sendBtn.addEventListener('click', () => sendMessage());
+autoResize();
+
+/* ---------- sidebar / pdf pane / fullscreen ---------- */
+els.sidebarToggle.addEventListener('click', () => els.sidebar.classList.toggle('collapsed'));
+els.pdfToggleBtn.addEventListener('click', () => els.pdfPane.classList.toggle('hidden'));
+els.pdfCloseBtn.addEventListener('click', () => els.pdfPane.classList.add('hidden'));
+els.fullscreenBtn.addEventListener('click', () => {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>toast('Fullscreen not available','error'));
+  else document.exitFullscreen();
+});
+els.settingsBtn.addEventListener('click', () => els.settingsModal.classList.replace('hidden','flex'));
+els.settingsCloseBtn.addEventListener('click', () => els.settingsModal.classList.replace('flex','hidden'));
+
+/* ---------- clear chat ---------- */
+els.clearChatBtn.addEventListener('click', () => els.confirmModal.classList.replace('hidden','flex'));
+els.confirmCancel.addEventListener('click', () => els.confirmModal.classList.replace('flex','hidden'));
+els.confirmClear.addEventListener('click', () => {
+  els.thread.innerHTML = '';
+  els.thread.classList.add('hidden');
+  els.emptyState.style.display = 'flex';
+  els.confirmModal.classList.replace('flex','hidden');
+  toast('Conversation cleared', 'success');
+});
+
+/* ---------- toast system ---------- */
+function toast(msg, type='error'){
+  const icon = type === 'error' ? 'alert-circle' : type === 'success' ? 'check-circle-2' : 'info';
+  const color = type === 'error' ? 'rose' : type === 'success' ? 'emerald' : 'indigo';
+  const t = document.createElement('div');
+  t.className = `toast-in glass border border-${color}-500/25 rounded-xl px-3.5 py-2.5 flex items-center gap-2 text-[12.5px] font-medium shadow-lg min-w-[220px]`;
+  t.innerHTML = `<i data-lucide="${icon}" class="w-4 h-4 text-${color}-400 shrink-0"></i><span class="text-slate-200">${msg}</span>`;
+  els.toasts.appendChild(t);
+  lucide.createIcons();
+  setTimeout(() => { t.style.transition='opacity .3s,transform .3s'; t.style.opacity='0'; t.style.transform='translateY(6px)'; setTimeout(()=>t.remove(),300); }, 3800);
+}
+
+/* ---------- markdown rendering + citation parsing ---------- */
+marked.setOptions({ breaks: true, gfm: true });
+
+function renderMarkdown(text){
+  const html = marked.parse(text || '');
+  const wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  wrap.querySelectorAll('pre').forEach(pre => {
+    const code = pre.querySelector('code');
+    const btn = document.createElement('button');
+    btn.className = 'code-copy absolute top-2 right-2 text-[10.5px] bg-white/8 hover:bg-white/15 text-slate-300 px-2 py-1 rounded-md flex items-center gap-1';
+    btn.innerHTML = '<i data-lucide="copy" style="width:11px;height:11px;"></i>Copy';
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(code.textContent).then(() => toast('Code copied to clipboard','success'));
+    });
+    pre.classList.add('code-wrap','relative');
+    pre.appendChild(btn);
+  });
+  return wrap.innerHTML;
+}
+
+// Extracts "Page N" style citations e.g. (p.3) [Page 12] page 4 -> pill badges appended after render
+function extractCitations(text){
+  const found = new Set();
+  const re = /\[?\(?(?:pg\.?|page)\s?(\d{1,3})\)?\]?/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) found.add(m[1]);
+  return [...found];
+}
+
+/* ---------- response parsing (kept compatible) ---------- */
+function extractAnswerText(data){
+  if (typeof data === 'string') return data;
+  if (!data || typeof data !== 'object') return String(data ?? '');
+  const candidates = [data.answer, data.response, data.result, data.text, data.message, data.output, data.content];
+  for (const c of candidates){
+    if (typeof c === 'string' && c.trim()) return c;
+    if (c && typeof c === 'object'){
+      const inner = extractAnswerText(c);
+      if (inner && inner !== '[object Object]') return inner;
+    }
+  }
+  if (Array.isArray(data)) {
+    return data.map(extractAnswerText).filter(Boolean).join('\n\n');
+  }
+  try { return JSON.stringify(data); } catch { return String(data); }
+}
+
+/* ---------- message rendering ---------- */
+function scrollToBottom(){ els.messages.scrollTo({ top: els.messages.scrollHeight, behavior: 'smooth' }); }
+
+function addUserMessage(text){
+  els.emptyState.style.display = 'none';
+  els.thread.classList.remove('hidden');
+  const row = document.createElement('div');
+  row.className = 'msg-in flex gap-3 justify-end';
+  row.innerHTML = `
+    <div class="max-w-[80%] sm:max-w-[70%] rounded-2xl rounded-tr-sm px-4 py-2.5 text-[14px] leading-relaxed text-white shadow-lg"
+      style="background:linear-gradient(135deg,var(--accent-1),var(--accent-2));">${escapeHtml(text)}</div>
+    <div class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center shrink-0 text-[11px] font-bold">You</div>`;
+  els.thread.appendChild(row);
+  scrollToBottom();
+}
+
+function addThinkingMessage(){
+  const row = document.createElement('div');
+  row.className = 'msg-in flex gap-3';
+  row.id = 'thinkingRow';
+  row.innerHTML = `
+    <div class="w-8 h-8 rounded-full brand-gradient flex items-center justify-center shrink-0"><i data-lucide="sparkles" class="w-4 h-4 text-white"></i></div>
+    <div class="rounded-2xl rounded-tl-sm px-4 py-3.5 bg-white/[.04] border border-white/8 flex items-center gap-1.5">
+      <span class="dot w-1.5 h-1.5 rounded-full bg-indigo-300"></span>
+      <span class="dot w-1.5 h-1.5 rounded-full bg-indigo-300"></span>
+      <span class="dot w-1.5 h-1.5 rounded-full bg-indigo-300"></span>
+    </div>`;
+  els.thread.appendChild(row);
+  lucide.createIcons();
+  scrollToBottom();
+}
+function removeThinkingMessage(){ document.getElementById('thinkingRow')?.remove(); }
+
+function addAIMessage(text, isError=false){
+  const citations = isError ? [] : extractCitations(text);
+  const row = document.createElement('div');
+  row.className = 'msg-in flex gap-3';
+  row.innerHTML = `
+    <div class="w-8 h-8 rounded-full ${isError ? 'bg-rose-500/20 border border-rose-500/30' : 'brand-gradient'} flex items-center justify-center shrink-0">
+      <i data-lucide="${isError ? 'alert-triangle' : 'sparkles'}" class="w-4 h-4 ${isError ? 'text-rose-400' : 'text-white'}"></i>
+    </div>
+    <div class="min-w-0 flex-1">
+      <div class="rounded-2xl rounded-tl-sm px-4 py-3 bg-white/[.04] border border-white/8 prose-ai text-[14px]">
+        ${isError ? `<p class="text-rose-300">${escapeHtml(text)}</p>` : renderMarkdown(text)}
+      </div>
+      ${citations.length ? `<div class="flex flex-wrap gap-1.5 mt-2">${citations.map(p =>
+        `<button class="cite-pill text-[11px] font-medium text-indigo-300 bg-indigo-500/10 border border-indigo-500/25 rounded-full px-2.5 py-1 flex items-center gap-1" title="Jump to page ${p}">📄 Page ${p}</button>`
+      ).join('')}</div>` : ''}
+    </div>`;
+  els.thread.appendChild(row);
+  lucide.createIcons();
+  scrollToBottom();
+}
+
+function escapeHtml(s){
+  const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+}
+
+/* ---------- send flow ---------- */
+async function sendMessage(promptOverride){
+  const question = (promptOverride ?? els.composer.value).trim();
+  if (!question) return;
+  els.composer.value = ''; autoResize();
+  addUserMessage(question);
+  addThinkingMessage();
+
+  try {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
+    if (!res.ok) throw new Error(`Server responded ${res.status}`);
+    const data = await res.json();
+    const answer = extractAnswerText(data);
+    removeThinkingMessage();
+    addAIMessage(answer || "I couldn't find an answer to that in the document.");
+  } catch (err) {
+    removeThinkingMessage();
+    addAIMessage("I couldn't reach the Readora backend. Check that the API server is running.", true);
+    toast(err.message?.includes('fetch') ? 'Connection to backend failed' : err.message, 'error');
+  }
+}
+</script>
+</body>
+</html>

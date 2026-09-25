@@ -1,0 +1,15 @@
+# Environment variables (API keys)
+.env
+
+# Python virtual environment
+venv/
+.venv/
+env/
+
+# Vector database storage
+chroma_db/
+
+# Python cache & build files
+__pycache__/
+*.pyc
+.DS_Store
