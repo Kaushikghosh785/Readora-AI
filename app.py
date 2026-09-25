@@ -1,10 +1,13 @@
 import os
 import time
 import warnings
+from pathlib import Path
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -19,27 +22,33 @@ load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
 
 if not api_key:
-    raise ValueError("GOOGLE_API_KEY is missing from your .env file!")
+    raise ValueError(
+        "GOOGLE_API_KEY is missing! Set it in your .env file locally, "
+        "or in Render's dashboard under Environment > Environment Variables."
+    )
 
 print("2. Initializing FastAPI...")
 app = FastAPI(title="Readora Backend API")
 
+# NOTE: allow_credentials must stay False while allow_origins is "*".
+# The frontend calls the API with a relative path (same-origin), so
+# CORS barely matters for the deployed app -- this wildcard just keeps
+# things working if you ever call the API from a different origin
+# (e.g. testing from another host) without cookies/auth headers.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 print("3. Connecting models...")
 
-# Fixed: "models/embedding-001" is deprecated and returns a 404 on v1beta.
-# Replaced with "models/gemini-embedding-001", the current supported embedding model.
 embedding_model = GoogleGenerativeAIEmbeddings(
     model="models/gemini-embedding-001",
     google_api_key=api_key,
-    output_dimensionality=768,  # keeps vector size compact and consistent
+    output_dimensionality=768,
 )
 
 llm = ChatGoogleGenerativeAI(
@@ -48,28 +57,37 @@ llm = ChatGoogleGenerativeAI(
     max_retries=5,
 )
 
-CHROMA_DIR = "./chroma_db"
-PDF_PATH = "GRU.pdf"
+# Resolve paths relative to this file, not the process's current working
+# directory -- Render (and some process managers) may launch the app from
+# a different cwd than you expect, which causes "file not found" errors
+# even though the file is right next to app.py in your repo.
+BASE_DIR = Path(__file__).resolve().parent
+CHROMA_DIR = BASE_DIR / "chroma_db"
+PDF_PATH = BASE_DIR / "GRU.pdf"
+INDEX_HTML_PATH = BASE_DIR / "index.html"
 
 print("4. Checking Vector DB...")
-if os.path.exists(CHROMA_DIR) and os.listdir(CHROMA_DIR):
+if CHROMA_DIR.exists() and any(CHROMA_DIR.iterdir()):
     print("   -> Loading existing Chroma DB...")
     vector_db = Chroma(
-        persist_directory=CHROMA_DIR,
+        persist_directory=str(CHROMA_DIR),
         embedding_function=embedding_model
     )
 else:
-    if not os.path.exists(PDF_PATH):
-        raise FileNotFoundError(f"Missing '{PDF_PATH}'. Ensure it is saved in {os.getcwd()}")
+    if not PDF_PATH.exists():
+        raise FileNotFoundError(
+            f"Missing '{PDF_PATH.name}'. Make sure it is committed to your "
+            f"repo in the same folder as app.py (expected at: {PDF_PATH})."
+        )
     print("   -> First-time setup: Indexing GRU.pdf into Chroma DB...")
-    loader = PyPDFLoader(PDF_PATH)
+    loader = PyPDFLoader(str(PDF_PATH))
     documents = loader.load()
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     chunks = text_splitter.split_documents(documents)
     vector_db = Chroma.from_documents(
         documents=chunks,
         embedding=embedding_model,
-        persist_directory=CHROMA_DIR
+        persist_directory=str(CHROMA_DIR)
     )
 
 retriever = vector_db.as_retriever(
@@ -84,6 +102,10 @@ def invoke_with_retry(prompt, max_attempts=5, base_delay=2):
     temporarily overloaded (503 UNAVAILABLE). This is a transient,
     server-side condition on Google's end -- not a bad model name --
     so retrying after a short wait usually succeeds.
+
+    This function is blocking (time.sleep + a synchronous SDK call), so
+    it must always be run off the event loop -- see run_in_threadpool
+    below in chat_endpoint. Do not call it directly inside an `async def`.
     """
     last_error = None
     for attempt in range(1, max_attempts + 1):
@@ -106,13 +128,31 @@ class QueryRequest(BaseModel):
 
 @app.get("/")
 async def serve_frontend():
-    return FileResponse("index.html")
+    return FileResponse(str(INDEX_HTML_PATH))
+
+
+@app.get("/api/health")
+async def health_check():
+    # Handy for confirming the deployed backend is actually reachable,
+    # separately from the RAG pipeline (e.g. curl your-app.onrender.com/api/health)
+    return {"status": "ok"}
 
 
 @app.post("/api/chat")
 async def chat_endpoint(request: QueryRequest):
+    question = request.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+    if len(question) > 2000:
+        raise HTTPException(status_code=400, detail="Question is too long (max 2000 characters).")
+
     try:
-        retrieved_docs = retriever.invoke(request.question)
+        # retriever.invoke and invoke_with_retry are both blocking (sync SDK
+        # calls, plus time.sleep on retries). Running them directly inside
+        # this async endpoint would block the whole server for every other
+        # concurrent request. run_in_threadpool offloads them to a worker
+        # thread so the event loop stays free.
+        retrieved_docs = await run_in_threadpool(retriever.invoke, question)
         if not retrieved_docs:
             return {"answer": "I could not find the answer in the PDF.", "sources": []}
 
@@ -125,12 +165,10 @@ Context:
 {context}
 
 Question:
-{request.question}"""
+{question}"""
 
-        response = invoke_with_retry(prompt)
+        response = await run_in_threadpool(invoke_with_retry, prompt)
 
-        # Some model responses return content as a list of parts instead of
-        # a plain string. Normalize it so the frontend always gets clean text.
         raw_content = response.content if hasattr(response, 'content') else response
         if isinstance(raw_content, list):
             answer_text = "".join(
@@ -142,8 +180,10 @@ Question:
 
         return {
             "answer": answer_text,
-            "sources": list(set(sources))
+            "sources": sorted(set(sources))
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Server Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -151,5 +191,12 @@ Question:
 
 if __name__ == "__main__":
     import uvicorn
-    print("\n🚀 Ready! Access app at: http://127.0.0.1:8000\n")
-    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
+    # Render assigns a random port at runtime via the PORT env var and
+    # routes external traffic to it -- binding to a hardcoded 127.0.0.1:8000
+    # only accepts connections from inside the container itself, so Render's
+    # proxy can never reach it. Binding 0.0.0.0 + $PORT fixes that.
+    # reload=True is a dev-only feature (auto-restarts on file changes) and
+    # should never run in production.
+    port = int(os.getenv("PORT", 8000))
+    print(f"\n🚀 Ready! Listening on 0.0.0.0:{port}\n")
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)

@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config = {
@@ -224,7 +225,7 @@ tailwind.config = {
     <div class="space-y-4 text-[13px]">
       <div class="flex items-center justify-between">
         <span class="text-slate-300">API endpoint</span>
-        <span class="text-slate-500 font-mono text-[11px]">127.0.0.1:8000</span>
+        <span class="text-slate-500 font-mono text-[11px]">same origin (/api/chat)</span>
       </div>
       <div class="flex items-center justify-between">
         <span class="text-slate-300">Retrieval model</span>
@@ -261,7 +262,15 @@ tailwind.config = {
 /* ===================== Readora AI — app logic ===================== */
 lucide.createIcons();
 
-const API_URL = "http://127.0.0.1:8000/api/chat";
+// FIX: was hardcoded to "http://127.0.0.1:8000/api/chat", which pointed at
+// *whoever's laptop opened the page* rather than the deployed server. That
+// caused the Chrome "connect to local network device" popup for you (since
+// you had a local backend on 127.0.0.1:8000) and a flat connection failure
+// for your friend (who doesn't). Since FastAPI serves this same index.html,
+// a relative path always resolves to the correct backend automatically,
+// whether that's localhost during development or your Render URL in
+// production.
+const API_URL = "/api/chat";
 
 const els = {
   messages: document.getElementById('messages'),
@@ -366,9 +375,15 @@ function toast(msg, type='error'){
 marked.setOptions({ breaks: true, gfm: true });
 
 function renderMarkdown(text){
-  const html = marked.parse(text || '');
+  const rawHtml = marked.parse(text || '');
+  // FIX: the AI's answer is derived from PDF content and model output that
+  // you don't fully control, and marked() passes raw HTML through by
+  // default. Without sanitizing, a crafted document or response could
+  // inject a script tag or an onerror handler that runs in the browser.
+  // DOMPurify strips anything dangerous while keeping normal formatting.
+  const safeHtml = DOMPurify.sanitize(rawHtml);
   const wrap = document.createElement('div');
-  wrap.innerHTML = html;
+  wrap.innerHTML = safeHtml;
   wrap.querySelectorAll('pre').forEach(pre => {
     const code = pre.querySelector('code');
     const btn = document.createElement('button');
@@ -384,7 +399,14 @@ function renderMarkdown(text){
 }
 
 // Extracts "Page N" style citations e.g. (p.3) [Page 12] page 4 -> pill badges appended after render
-function extractCitations(text){
+function extractCitations(text, backendSources){
+  // FIX: prefer the accurate page numbers the backend already computed
+  // from the actual retrieved chunks (data.sources) over guessing from
+  // the model's prose, which only worked when the LLM happened to type
+  // the words "page N" verbatim.
+  if (Array.isArray(backendSources) && backendSources.length){
+    return backendSources.map(String);
+  }
   const found = new Set();
   const re = /\[?\(?(?:pg\.?|page)\s?(\d{1,3})\)?\]?/gi;
   let m;
@@ -443,8 +465,8 @@ function addThinkingMessage(){
 }
 function removeThinkingMessage(){ document.getElementById('thinkingRow')?.remove(); }
 
-function addAIMessage(text, isError=false){
-  const citations = isError ? [] : extractCitations(text);
+function addAIMessage(text, isError=false, sources=[]){
+  const citations = isError ? [] : extractCitations(text, sources);
   const row = document.createElement('div');
   row.className = 'msg-in flex gap-3';
   row.innerHTML = `
@@ -482,11 +504,14 @@ async function sendMessage(promptOverride){
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question })
     });
-    if (!res.ok) throw new Error(`Server responded ${res.status}`);
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || `Server responded ${res.status}`);
+    }
     const data = await res.json();
     const answer = extractAnswerText(data);
     removeThinkingMessage();
-    addAIMessage(answer || "I couldn't find an answer to that in the document.");
+    addAIMessage(answer || "I couldn't find an answer to that in the document.", false, data.sources);
   } catch (err) {
     removeThinkingMessage();
     addAIMessage("I couldn't reach the Readora backend. Check that the API server is running.", true);
