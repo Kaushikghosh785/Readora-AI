@@ -45,9 +45,6 @@ tailwind.config = {
   .dot:nth-child(2){ animation-delay:.15s; }
   .dot:nth-child(3){ animation-delay:.3s; }
 
-  @keyframes shimmer{ 0%{ background-position:-400px 0;} 100%{ background-position:400px 0;} }
-  .shimmer{ background:linear-gradient(90deg, rgba(148,163,184,.06) 0%, rgba(148,163,184,.16) 50%, rgba(148,163,184,.06) 100%); background-size:400px 100%; animation:shimmer 1.6s infinite linear; }
-
   @keyframes toastIn{ from{ opacity:0; transform:translateY(10px) scale(.96);} to{ opacity:1; transform:translateY(0) scale(1);} }
   .toast-in{ animation:toastIn .25s ease both; }
 
@@ -77,9 +74,13 @@ tailwind.config = {
 
   input[type=range]{ accent-color:#8b5cf6; }
   [data-theme="light"]{ display:none; }
+
+  #dropzone.drag-over{ border-color:rgba(139,92,246,.6); background:rgba(139,92,246,.06); }
 </style>
 </head>
 <body class="font-sans text-slate-100 h-full">
+
+<input type="file" id="fileInput" accept="application/pdf,.pdf" class="hidden">
 
 <div class="h-full w-full flex flex-col" style="height:100dvh;">
 
@@ -125,38 +126,51 @@ tailwind.config = {
     <!-- SIDEBAR -->
     <aside id="sidebar" class="sidebar w-[280px] shrink-0 border-r border-white/5 bg-[#0b0f1a] flex flex-col min-h-0">
       <div class="p-3.5 border-b border-white/5">
-        <div class="rounded-xl border border-white/8 bg-gradient-to-br from-white/[.04] to-transparent p-3 hover:border-indigo-500/30 transition cursor-pointer group">
-          <div class="flex gap-3">
-            <div class="w-11 h-14 rounded-md bg-gradient-to-br from-rose-500/20 to-orange-500/10 border border-white/10 flex items-center justify-center shrink-0">
-              <i data-lucide="file-text" class="w-5 h-5 text-rose-300"></i>
+        <div id="fileCard" class="rounded-xl border border-white/8 bg-gradient-to-br from-white/[.04] to-transparent p-3">
+          <!-- shown when nothing has been uploaded yet -->
+          <div id="fileCardEmpty" class="text-center py-3">
+            <i data-lucide="file-plus-2" class="w-6 h-6 mx-auto mb-2 text-slate-600"></i>
+            <p class="text-[12px] text-slate-500">No document loaded yet</p>
+          </div>
+          <!-- shown while a PDF is being embedded -->
+          <div id="fileCardLoading" class="hidden text-center py-3">
+            <i data-lucide="loader-2" class="w-6 h-6 mx-auto mb-2 text-indigo-400 animate-spin"></i>
+            <p id="fileLoadingName" class="text-[12px] text-slate-400 truncate px-2"></p>
+            <p class="text-[10.5px] text-slate-600 mt-0.5">Reading &amp; embedding…</p>
+          </div>
+          <!-- shown once a document is ready -->
+          <div id="fileCardLoaded" class="hidden">
+            <div class="flex gap-3">
+              <div class="w-11 h-14 rounded-md bg-gradient-to-br from-rose-500/20 to-orange-500/10 border border-white/10 flex items-center justify-center shrink-0">
+                <i data-lucide="file-text" class="w-5 h-5 text-rose-300"></i>
+              </div>
+              <div class="min-w-0 flex-1">
+                <p id="fileNameLabel" class="text-[13px] font-semibold truncate"></p>
+                <p id="fileMetaLabel" class="text-[11px] text-slate-500 mt-0.5"></p>
+              </div>
             </div>
-            <div class="min-w-0 flex-1">
-              <p class="text-[13px] font-semibold truncate group-hover:text-indigo-300 transition">GRU.pdf</p>
-              <p class="text-[11px] text-slate-500 mt-0.5">2.4 MB · 18 pages</p>
-              <p class="text-[10.5px] text-slate-600">Uploaded Sep 22, 2026</p>
+            <div class="mt-2.5 flex items-center gap-1.5 text-[10.5px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-1 w-fit">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,.5)]"></span>
+              Vectorized &amp; Ready
             </div>
           </div>
-          <div class="mt-2.5 flex items-center gap-1.5 text-[10.5px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-full px-2 py-1 w-fit">
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,.5)]"></span>
-            Vectorized &amp; Ready
-          </div>
         </div>
-      </div>
-
-      <div class="p-3.5 border-b border-white/5">
-        <div class="relative">
-          <i data-lucide="search" class="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2"></i>
-          <input id="topicSearch" type="text" placeholder="Search topics…" class="w-full bg-white/5 border border-white/8 rounded-lg pl-8 pr-3 py-2 text-[12.5px] placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/40 focus:bg-white/[.07] transition">
-        </div>
+        <button id="changeDocBtn" class="hidden mt-2 w-full text-[12px] font-medium text-slate-400 hover:text-slate-100 bg-white/5 hover:bg-white/10 border border-white/8 rounded-lg py-2 transition flex items-center justify-center gap-1.5">
+          <i data-lucide="refresh-cw" class="w-3 h-3"></i> Upload a different PDF
+        </button>
       </div>
 
       <div class="flex-1 overflow-y-auto px-3.5 py-3">
-        <p class="text-[10.5px] font-semibold uppercase tracking-wider text-slate-600 mb-2 px-0.5">Key topics</p>
-        <div id="topicList" class="space-y-1"></div>
+        <p class="text-[10.5px] font-semibold uppercase tracking-wider text-slate-600 mb-2 px-0.5">Tips</p>
+        <ul class="space-y-2 text-[12px] text-slate-500 leading-relaxed">
+          <li class="flex gap-2"><i data-lucide="dot" class="w-3 h-3 shrink-0 mt-0.5"></i>Ask specific questions for the most accurate, cited answers.</li>
+          <li class="flex gap-2"><i data-lucide="dot" class="w-3 h-3 shrink-0 mt-0.5"></i>Page citations under each answer link back to where it found the info.</li>
+          <li class="flex gap-2"><i data-lucide="dot" class="w-3 h-3 shrink-0 mt-0.5"></i>Documents with only scanned images (no selectable text) can't be read yet.</li>
+        </ul>
       </div>
 
       <div class="p-3.5 border-t border-white/5 text-[10.5px] text-slate-600 flex items-center gap-1.5">
-        <i data-lucide="shield-check" class="w-3 h-3"></i> Local vector store · private
+        <i data-lucide="shield-check" class="w-3 h-3"></i> Your document is only used for this session
       </div>
     </aside>
 
@@ -165,15 +179,32 @@ tailwind.config = {
 
       <!-- messages -->
       <div id="messages" class="flex-1 overflow-y-auto px-4 sm:px-6">
-        <div id="emptyState" class="h-full flex flex-col items-center justify-center text-center px-4 py-10 max-w-lg mx-auto">
+
+        <!-- shown before any PDF has been uploaded -->
+        <div id="uploadState" class="h-full flex flex-col items-center justify-center text-center px-4 py-10 max-w-lg mx-auto">
+          <div class="w-14 h-14 rounded-2xl brand-gradient flex items-center justify-center mb-4 shadow-[0_0_40px_-8px_rgba(139,92,246,.6)]">
+            <i data-lucide="upload-cloud" class="w-7 h-7 text-white"></i>
+          </div>
+          <h2 class="font-sora font-bold text-xl mb-1.5">Upload a PDF to get started</h2>
+          <p class="text-slate-500 text-[13.5px] mb-6">Readora reads the whole document and answers with cited sources.</p>
+          <div id="dropzone" class="w-full border-2 border-dashed border-white/15 rounded-2xl p-8 cursor-pointer hover:border-indigo-500/40 hover:bg-white/[.02] transition">
+            <i data-lucide="file-up" class="w-8 h-8 mx-auto mb-2 text-slate-500"></i>
+            <p class="text-[13px] text-slate-400">Drag &amp; drop a PDF here, or <span class="text-indigo-300 underline">browse files</span></p>
+            <p class="text-[11px] text-slate-600 mt-1">Max 20MB · one document per session</p>
+          </div>
+        </div>
+
+        <!-- shown once a document is ready, before the first message -->
+        <div id="emptyState" class="hidden h-full flex-col items-center justify-center text-center px-4 py-10 max-w-lg mx-auto">
           <div class="w-14 h-14 rounded-2xl brand-gradient flex items-center justify-center mb-4 shadow-[0_0_40px_-8px_rgba(139,92,246,.6)]">
             <i data-lucide="message-circle-question" class="w-7 h-7 text-white"></i>
           </div>
-          <h2 class="font-sora font-bold text-xl mb-1.5">Ask GRU.pdf anything</h2>
-          <p class="text-slate-500 text-[13.5px] mb-6">Readora reads the full document and answers with cited sources.</p>
+          <h2 id="emptyStateTitle" class="font-sora font-bold text-xl mb-1.5">Ask your document anything</h2>
+          <p class="text-slate-500 text-[13.5px] mb-6">It's read the full document and will answer with cited sources.</p>
           <div id="chips" class="flex flex-wrap gap-2 justify-center"></div>
         </div>
-        <div id="thread" class="max-w-3xl mx-auto py-5 space-y-5"></div>
+
+        <div id="thread" class="hidden max-w-3xl mx-auto py-5 space-y-5"></div>
       </div>
 
       <!-- input deck -->
@@ -182,15 +213,15 @@ tailwind.config = {
           <div id="shortcuts" class="flex gap-1.5 mb-2 overflow-x-auto no-scrollbar pb-0.5">
             <button data-prompt="Summarize the main points of this document." class="shortcut-btn shrink-0 flex items-center gap-1.5 text-[12px] font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/8 rounded-full px-3 py-1.5 transition"><i data-lucide="list" class="w-3 h-3"></i>Summarize</button>
             <button data-prompt="What are the key insights and conclusions?" class="shortcut-btn shrink-0 flex items-center gap-1.5 text-[12px] font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/8 rounded-full px-3 py-1.5 transition"><i data-lucide="lightbulb" class="w-3 h-3"></i>Key Insights</button>
-            <button data-prompt="Explain the equations in this document step by step." class="shortcut-btn shrink-0 flex items-center gap-1.5 text-[12px] font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/8 rounded-full px-3 py-1.5 transition"><i data-lucide="sigma" class="w-3 h-3"></i>Explain Equations</button>
+            <button data-prompt="List any important numbers, dates, or figures mentioned." class="shortcut-btn shrink-0 flex items-center gap-1.5 text-[12px] font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/8 rounded-full px-3 py-1.5 transition"><i data-lucide="sigma" class="w-3 h-3"></i>Key Figures</button>
           </div>
 
           <div class="glow-ring flex items-end gap-2 bg-[#11172a] border border-white/10 rounded-3xl px-3 py-2 shadow-[0_8px_30px_-10px_rgba(0,0,0,.6)] transition">
-            <button id="attachBtn" class="p-2 rounded-full text-slate-500 hover:text-slate-200 hover:bg-white/5 transition shrink-0" title="Attach document">
+            <button id="attachBtn" class="p-2 rounded-full text-slate-500 hover:text-slate-200 hover:bg-white/5 transition shrink-0" title="Upload a PDF">
               <i data-lucide="paperclip" style="width:18px;height:18px;"></i>
             </button>
-            <textarea id="composer" rows="1" placeholder="Ask about GRU.pdf… (Shift+Enter for a new line)" class="flex-1 bg-transparent resize-none outline-none text-[14px] placeholder:text-slate-600 max-h-40 py-1.5 leading-relaxed"></textarea>
-            <button id="sendBtn" class="w-9 h-9 shrink-0 rounded-full brand-gradient flex items-center justify-center text-white disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 active:scale-95 transition shadow-[0_0_18px_-4px_rgba(99,102,241,.7)]">
+            <textarea id="composer" rows="1" disabled placeholder="Upload a PDF above to start asking questions…" class="flex-1 bg-transparent resize-none outline-none text-[14px] placeholder:text-slate-600 max-h-40 py-1.5 leading-relaxed disabled:cursor-not-allowed"></textarea>
+            <button id="sendBtn" disabled class="w-9 h-9 shrink-0 rounded-full brand-gradient flex items-center justify-center text-white disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 active:scale-95 transition shadow-[0_0_18px_-4px_rgba(99,102,241,.7)]">
               <i data-lucide="arrow-up" style="width:18px;height:18px;"></i>
             </button>
           </div>
@@ -202,15 +233,16 @@ tailwind.config = {
     <!-- PDF VIEWER PANE -->
     <aside id="pdfPane" class="hidden w-full sm:w-[420px] shrink-0 border-l border-white/5 bg-[#0b0f1a] absolute sm:relative right-0 top-0 h-full flex-col z-20">
       <div class="flex items-center justify-between px-4 h-12 border-b border-white/5 shrink-0">
-        <span class="text-[12.5px] font-semibold flex items-center gap-1.5"><i data-lucide="file-text" class="w-3.5 h-3.5 text-rose-300"></i>GRU.pdf</span>
-        <button id="pdfCloseBtn" class="p-1.5 rounded-lg hover:bg-white/5 text-slate-400"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+        <span id="pdfPaneLabel" class="text-[12.5px] font-semibold flex items-center gap-1.5 truncate"><i data-lucide="file-text" class="w-3.5 h-3.5 text-rose-300 shrink-0"></i><span class="truncate">No document</span></span>
+        <button id="pdfCloseBtn" class="p-1.5 rounded-lg hover:bg-white/5 text-slate-400 shrink-0"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
       </div>
-      <div class="flex-1 flex items-center justify-center text-center p-6 text-slate-600 text-[12.5px]">
+      <div id="pdfPaneEmpty" class="flex-1 flex items-center justify-center text-center p-6 text-slate-600 text-[12.5px]">
         <div>
           <i data-lucide="file-search" class="w-8 h-8 mx-auto mb-2 opacity-40"></i>
-          PDF preview renders here once a viewer endpoint is connected.
+          Upload a PDF to preview it here.
         </div>
       </div>
+      <embed id="pdfEmbed" class="hidden flex-1 w-full" type="application/pdf">
     </aside>
   </div>
 </div>
@@ -246,7 +278,7 @@ tailwind.config = {
       <i data-lucide="alert-triangle" class="w-5 h-5"></i>
     </div>
     <h3 class="font-sora font-bold text-[14.5px] mb-1">Clear this conversation?</h3>
-    <p class="text-slate-500 text-[12.5px] mb-4">This can't be undone.</p>
+    <p class="text-slate-500 text-[12.5px] mb-4">This can't be undone. Your uploaded document stays loaded.</p>
     <div class="flex gap-2">
       <button id="confirmCancel" class="flex-1 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-[13px] font-medium transition">Cancel</button>
       <button id="confirmClear" class="flex-1 py-2 rounded-xl bg-rose-500/90 hover:bg-rose-500 text-[13px] font-medium transition">Clear</button>
@@ -262,19 +294,18 @@ tailwind.config = {
 /* ===================== Readora AI — app logic ===================== */
 lucide.createIcons();
 
-// FIX: was hardcoded to "http://127.0.0.1:8000/api/chat", which pointed at
-// *whoever's laptop opened the page* rather than the deployed server. That
-// caused the Chrome "connect to local network device" popup for you (since
-// you had a local backend on 127.0.0.1:8000) and a flat connection failure
-// for your friend (who doesn't). Since FastAPI serves this same index.html,
-// a relative path always resolves to the correct backend automatically,
-// whether that's localhost during development or your Render URL in
-// production.
-const API_URL = "/api/chat";
+const API_URL = "/api/chat"; // relative -- always hits the server that served this page
+const UPLOAD_URL = "/api/upload";
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+// Holds { session_id, filename, pages, size_bytes } once a PDF has been
+// uploaded and embedded. Everything chat-related is gated on this being set.
+let session = null;
 
 const els = {
   messages: document.getElementById('messages'),
   thread: document.getElementById('thread'),
+  uploadState: document.getElementById('uploadState'),
   emptyState: document.getElementById('emptyState'),
   chips: document.getElementById('chips'),
   composer: document.getElementById('composer'),
@@ -282,6 +313,9 @@ const els = {
   sidebar: document.getElementById('sidebar'),
   sidebarToggle: document.getElementById('sidebarToggle'),
   pdfPane: document.getElementById('pdfPane'),
+  pdfPaneLabel: document.getElementById('pdfPaneLabel'),
+  pdfPaneEmpty: document.getElementById('pdfPaneEmpty'),
+  pdfEmbed: document.getElementById('pdfEmbed'),
   pdfToggleBtn: document.getElementById('pdfToggleBtn'),
   pdfCloseBtn: document.getElementById('pdfCloseBtn'),
   clearChatBtn: document.getElementById('clearChatBtn'),
@@ -293,17 +327,20 @@ const els = {
   settingsCloseBtn: document.getElementById('settingsCloseBtn'),
   fullscreenBtn: document.getElementById('fullscreenBtn'),
   toasts: document.getElementById('toasts'),
-  topicSearch: document.getElementById('topicSearch'),
-  topicList: document.getElementById('topicList'),
+  fileInput: document.getElementById('fileInput'),
+  dropzone: document.getElementById('dropzone'),
+  attachBtn: document.getElementById('attachBtn'),
+  changeDocBtn: document.getElementById('changeDocBtn'),
+  fileCardEmpty: document.getElementById('fileCardEmpty'),
+  fileCardLoading: document.getElementById('fileCardLoading'),
+  fileCardLoaded: document.getElementById('fileCardLoaded'),
+  fileLoadingName: document.getElementById('fileLoadingName'),
+  fileNameLabel: document.getElementById('fileNameLabel'),
+  fileMetaLabel: document.getElementById('fileMetaLabel'),
 };
 
 const SUGGESTED_CHIPS = [
-  "Summarize main points", "Extract key conclusions", "List math formulations", "What datasets were used?"
-];
-const TOPICS = [
-  { label: "Introduction", page: 1 }, { label: "GRU Architecture", page: 3 },
-  { label: "Gate Equations", page: 5 }, { label: "Training Setup", page: 9 },
-  { label: "Results & Benchmarks", page: 12 }, { label: "Conclusion", page: 17 },
+  "Summarize main points", "Extract key conclusions", "List important numbers or dates", "What is this document about?"
 ];
 
 function renderChips(){
@@ -312,23 +349,104 @@ function renderChips(){
   ).join('');
   els.chips.querySelectorAll('.chip-btn').forEach(b => b.addEventListener('click', () => sendMessage(b.dataset.prompt)));
 }
-function renderTopics(filter=''){
-  const f = filter.toLowerCase();
-  els.topicList.innerHTML = TOPICS.filter(t => t.label.toLowerCase().includes(f)).map(t =>
-    `<button class="w-full flex items-center justify-between text-left px-2.5 py-1.5 rounded-lg hover:bg-white/5 text-[12.5px] text-slate-400 hover:text-slate-100 transition group">
-      <span class="truncate">${t.label}</span>
-      <span class="text-[10px] text-slate-600 group-hover:text-indigo-300 shrink-0 ml-2">p.${t.page}</span>
-    </button>`).join('') || `<p class="text-[12px] text-slate-600 px-1 py-2">No topics match.</p>`;
-}
-renderChips(); renderTopics();
-els.topicSearch.addEventListener('input', e => renderTopics(e.target.value));
+renderChips();
 document.querySelectorAll('.shortcut-btn').forEach(b => b.addEventListener('click', () => sendMessage(b.dataset.prompt)));
+
+/* ---------- file size formatting ---------- */
+function formatBytes(bytes){
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+/* ---------- upload flow ---------- */
+function openFilePicker(){ els.fileInput.click(); }
+els.dropzone.addEventListener('click', openFilePicker);
+els.attachBtn.addEventListener('click', openFilePicker);
+els.changeDocBtn.addEventListener('click', openFilePicker);
+
+els.fileInput.addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) handleFileUpload(file);
+  e.target.value = ''; // allow re-selecting the same filename later
+});
+
+['dragover'].forEach(evt => els.dropzone.addEventListener(evt, e => {
+  e.preventDefault(); els.dropzone.classList.add('drag-over');
+}));
+['dragleave', 'drop'].forEach(evt => els.dropzone.addEventListener(evt, e => {
+  e.preventDefault(); els.dropzone.classList.remove('drag-over');
+}));
+els.dropzone.addEventListener('drop', e => {
+  const file = e.dataTransfer.files[0];
+  if (file) handleFileUpload(file);
+});
+
+function setFileCardState(state){
+  els.fileCardEmpty.classList.toggle('hidden', state !== 'empty');
+  els.fileCardLoading.classList.toggle('hidden', state !== 'loading');
+  els.fileCardLoaded.classList.toggle('hidden', state !== 'loaded');
+  els.changeDocBtn.classList.toggle('hidden', state !== 'loaded');
+}
+
+async function handleFileUpload(file){
+  if (!file.name.toLowerCase().endsWith('.pdf')) {
+    toast('Only PDF files are supported.', 'error');
+    return;
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    toast(`File too large — max ${formatBytes(MAX_UPLOAD_BYTES)}.`, 'error');
+    return;
+  }
+
+  // reset chat state for the new document
+  els.thread.innerHTML = '';
+  els.thread.classList.add('hidden');
+  els.uploadState.style.display = 'none';
+  els.emptyState.style.display = 'none';
+  els.composer.disabled = true;
+  els.sendBtn.disabled = true;
+
+  setFileCardState('loading');
+  els.fileLoadingName.textContent = file.name;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch(UPLOAD_URL, { method: 'POST', body: formData });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Upload failed (${res.status})`);
+
+    session = data;
+    els.fileNameLabel.textContent = data.filename;
+    els.fileMetaLabel.textContent = `${formatBytes(data.size_bytes)} · ${data.pages} page${data.pages === 1 ? '' : 's'}`;
+    setFileCardState('loaded');
+
+    els.emptyState.style.display = 'flex';
+    els.composer.disabled = false;
+    els.sendBtn.disabled = els.composer.value.trim().length === 0;
+    els.composer.placeholder = `Ask about ${data.filename}… (Shift+Enter for a new line)`;
+
+    els.pdfPaneLabel.querySelector('span').textContent = data.filename;
+    els.pdfEmbed.src = `/api/document/${data.session_id}`;
+    els.pdfEmbed.classList.remove('hidden');
+    els.pdfPaneEmpty.classList.add('hidden');
+
+    toast('Document ready — ask away!', 'success');
+  } catch (err) {
+    session = null;
+    setFileCardState('empty');
+    els.uploadState.style.display = 'flex';
+    toast(err.message || 'Upload failed. Please try again.', 'error');
+  }
+}
 
 /* ---------- textarea autoresize ---------- */
 function autoResize(){
   els.composer.style.height = 'auto';
   els.composer.style.height = Math.min(els.composer.scrollHeight, 160) + 'px';
-  els.sendBtn.disabled = els.composer.value.trim().length === 0;
+  els.sendBtn.disabled = els.composer.disabled || els.composer.value.trim().length === 0;
 }
 els.composer.addEventListener('input', autoResize);
 els.composer.addEventListener('keydown', e => {
@@ -339,7 +457,10 @@ autoResize();
 
 /* ---------- sidebar / pdf pane / fullscreen ---------- */
 els.sidebarToggle.addEventListener('click', () => els.sidebar.classList.toggle('collapsed'));
-els.pdfToggleBtn.addEventListener('click', () => els.pdfPane.classList.toggle('hidden'));
+els.pdfToggleBtn.addEventListener('click', () => {
+  if (!session) { toast('Upload a PDF first.', 'error'); return; }
+  els.pdfPane.classList.toggle('hidden');
+});
 els.pdfCloseBtn.addEventListener('click', () => els.pdfPane.classList.add('hidden'));
 els.fullscreenBtn.addEventListener('click', () => {
   if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>toast('Fullscreen not available','error'));
@@ -348,13 +469,13 @@ els.fullscreenBtn.addEventListener('click', () => {
 els.settingsBtn.addEventListener('click', () => els.settingsModal.classList.replace('hidden','flex'));
 els.settingsCloseBtn.addEventListener('click', () => els.settingsModal.classList.replace('flex','hidden'));
 
-/* ---------- clear chat ---------- */
+/* ---------- clear chat (keeps the uploaded document) ---------- */
 els.clearChatBtn.addEventListener('click', () => els.confirmModal.classList.replace('hidden','flex'));
 els.confirmCancel.addEventListener('click', () => els.confirmModal.classList.replace('flex','hidden'));
 els.confirmClear.addEventListener('click', () => {
   els.thread.innerHTML = '';
   els.thread.classList.add('hidden');
-  els.emptyState.style.display = 'flex';
+  if (session) els.emptyState.style.display = 'flex';
   els.confirmModal.classList.replace('flex','hidden');
   toast('Conversation cleared', 'success');
 });
@@ -365,7 +486,7 @@ function toast(msg, type='error'){
   const color = type === 'error' ? 'rose' : type === 'success' ? 'emerald' : 'indigo';
   const t = document.createElement('div');
   t.className = `toast-in glass border border-${color}-500/25 rounded-xl px-3.5 py-2.5 flex items-center gap-2 text-[12.5px] font-medium shadow-lg min-w-[220px]`;
-  t.innerHTML = `<i data-lucide="${icon}" class="w-4 h-4 text-${color}-400 shrink-0"></i><span class="text-slate-200">${msg}</span>`;
+  t.innerHTML = `<i data-lucide="${icon}" class="w-4 h-4 text-${color}-400 shrink-0"></i><span class="text-slate-200">${escapeHtml(msg)}</span>`;
   els.toasts.appendChild(t);
   lucide.createIcons();
   setTimeout(() => { t.style.transition='opacity .3s,transform .3s'; t.style.opacity='0'; t.style.transform='translateY(6px)'; setTimeout(()=>t.remove(),300); }, 3800);
@@ -376,11 +497,9 @@ marked.setOptions({ breaks: true, gfm: true });
 
 function renderMarkdown(text){
   const rawHtml = marked.parse(text || '');
-  // FIX: the AI's answer is derived from PDF content and model output that
-  // you don't fully control, and marked() passes raw HTML through by
-  // default. Without sanitizing, a crafted document or response could
-  // inject a script tag or an onerror handler that runs in the browser.
-  // DOMPurify strips anything dangerous while keeping normal formatting.
+  // The AI's answer is derived from the uploaded PDF's content and the
+  // model's own output, neither of which is fully trusted -- sanitize
+  // before it ever touches innerHTML.
   const safeHtml = DOMPurify.sanitize(rawHtml);
   const wrap = document.createElement('div');
   wrap.innerHTML = safeHtml;
@@ -398,12 +517,9 @@ function renderMarkdown(text){
   return wrap.innerHTML;
 }
 
-// Extracts "Page N" style citations e.g. (p.3) [Page 12] page 4 -> pill badges appended after render
 function extractCitations(text, backendSources){
-  // FIX: prefer the accurate page numbers the backend already computed
-  // from the actual retrieved chunks (data.sources) over guessing from
-  // the model's prose, which only worked when the LLM happened to type
-  // the words "page N" verbatim.
+  // Prefer the accurate page numbers the backend computed from the actual
+  // retrieved chunks over guessing from the model's prose.
   if (Array.isArray(backendSources) && backendSources.length){
     return backendSources.map(String);
   }
@@ -492,6 +608,10 @@ function escapeHtml(s){
 
 /* ---------- send flow ---------- */
 async function sendMessage(promptOverride){
+  if (!session) {
+    toast('Upload a PDF first.', 'error');
+    return;
+  }
   const question = (promptOverride ?? els.composer.value).trim();
   if (!question) return;
   els.composer.value = ''; autoResize();
@@ -502,19 +622,29 @@ async function sendMessage(promptOverride){
     const res = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question })
+      body: JSON.stringify({ session_id: session.session_id, question })
     });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new Error(errBody.detail || `Server responded ${res.status}`);
+      // 404 here specifically means the server no longer has this
+      // session (e.g. it restarted) -- prompt to re-upload rather than
+      // showing a generic error.
+      if (res.status === 404) {
+        session = null;
+        setFileCardState('empty');
+        els.emptyState.style.display = 'none';
+        els.uploadState.style.display = 'flex';
+        els.composer.disabled = true;
+        els.sendBtn.disabled = true;
+      }
+      throw new Error(data.detail || `Server responded ${res.status}`);
     }
-    const data = await res.json();
     const answer = extractAnswerText(data);
     removeThinkingMessage();
     addAIMessage(answer || "I couldn't find an answer to that in the document.", false, data.sources);
   } catch (err) {
     removeThinkingMessage();
-    addAIMessage("I couldn't reach the Readora backend. Check that the API server is running.", true);
+    addAIMessage(err.message || "I couldn't reach the Readora backend. Check that the API server is running.", true);
     toast(err.message?.includes('fetch') ? 'Connection to backend failed' : err.message, 'error');
   }
 }
