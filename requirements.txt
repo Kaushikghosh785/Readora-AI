@@ -7,3 +7,4 @@ langchain-text-splitters
 langchain-google-genai
 langchain-chroma
 pypdf
+python-multipart
