@@ -1,12 +1,14 @@
 import os
 import time
+import uuid
+import shutil
 import warnings
 from pathlib import Path
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -30,11 +32,6 @@ if not api_key:
 print("2. Initializing FastAPI...")
 app = FastAPI(title="Readora Backend API")
 
-# NOTE: allow_credentials must stay False while allow_origins is "*".
-# The frontend calls the API with a relative path (same-origin), so
-# CORS barely matters for the deployed app -- this wildcard just keeps
-# things working if you ever call the API from a different origin
-# (e.g. testing from another host) without cookies/auth headers.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -57,72 +54,30 @@ llm = ChatGoogleGenerativeAI(
     max_retries=5,
 )
 
-# Resolve paths relative to this file, not the process's current working
-# directory -- Render (and some process managers) may launch the app from
-# a different cwd than you expect, which causes "file not found" errors
-# even though the file is right next to app.py in your repo.
 BASE_DIR = Path(__file__).resolve().parent
-CHROMA_DIR = BASE_DIR / "chroma_db"
-PDF_PATH = BASE_DIR / "GRU.pdf"
 INDEX_HTML_PATH = BASE_DIR / "index.html"
+UPLOAD_DIR = BASE_DIR / "uploads"
+CHROMA_ROOT = BASE_DIR / "chroma_sessions"
+UPLOAD_DIR.mkdir(exist_ok=True)
+CHROMA_ROOT.mkdir(exist_ok=True)
 
-print("4. Checking Vector DB...")
-if CHROMA_DIR.exists() and any(CHROMA_DIR.iterdir()):
-    print("   -> Loading existing Chroma DB...")
-    vector_db = Chroma(
-        persist_directory=str(CHROMA_DIR),
-        embedding_function=embedding_model
-    )
-else:
-    if not PDF_PATH.exists():
-        raise FileNotFoundError(
-            f"Missing '{PDF_PATH.name}'. Make sure it is committed to your "
-            f"repo in the same folder as app.py (expected at: {PDF_PATH})."
-        )
-    print("   -> First-time setup: Indexing GRU.pdf into Chroma DB...")
-    loader = PyPDFLoader(str(PDF_PATH))
-    documents = loader.load()
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    chunks = text_splitter.split_documents(documents)
-    vector_db = Chroma.from_documents(
-        documents=chunks,
-        embedding=embedding_model,
-        persist_directory=str(CHROMA_DIR)
-    )
+MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB per upload
+SESSION_TTL_SECONDS = 3 * 60 * 60  # sessions expire after 3 hours
 
-retriever = vector_db.as_retriever(
-    search_type="mmr",
-    search_kwargs={"k": 4, "fetch_k": 10}
-)
+SESSIONS = {}
 
 
-def invoke_with_retry(prompt, max_attempts=5, base_delay=2):
-    """
-    Calls the LLM, retrying with exponential backoff if the model is
-    temporarily overloaded (503 UNAVAILABLE). This is a transient,
-    server-side condition on Google's end -- not a bad model name --
-    so retrying after a short wait usually succeeds.
-
-    This function is blocking (time.sleep + a synchronous SDK call), so
-    it must always be run off the event loop -- see run_in_threadpool
-    below in chat_endpoint. Do not call it directly inside an `async def`.
-    """
-    last_error = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return llm.invoke(prompt)
-        except Exception as e:
-            last_error = e
-            if "503" in str(e) or "UNAVAILABLE" in str(e):
-                wait = base_delay * (2 ** (attempt - 1))  # 2s, 4s, 8s, 16s, 32s
-                print(f"   -> Model overloaded (attempt {attempt}/{max_attempts}). Retrying in {wait}s...")
-                time.sleep(wait)
-                continue
-            raise  # non-503 errors fail immediately, no point retrying
-    raise last_error
+def _cleanup_expired_sessions():
+    now = time.time()
+    expired = [sid for sid, s in SESSIONS.items() if now - s["created"] > SESSION_TTL_SECONDS]
+    for sid in expired:
+        SESSIONS.pop(sid, None)
+        shutil.rmtree(CHROMA_ROOT / sid, ignore_errors=True)
+        (UPLOAD_DIR / f"{sid}.pdf").unlink(missing_ok=True)
 
 
 class QueryRequest(BaseModel):
+    session_id: str
     question: str
 
 
@@ -133,9 +88,140 @@ async def serve_frontend():
 
 @app.get("/api/health")
 async def health_check():
-    # Handy for confirming the deployed backend is actually reachable,
-    # separately from the RAG pipeline (e.g. curl your-app.onrender.com/api/health)
     return {"status": "ok"}
+
+
+def _add_batch_with_retry(vector_db, batch, max_retries=5, base_delay=3):
+    """Adds a batch of document chunks to ChromaDB with backoff retry to prevent 429 quota errors."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            if vector_db is None:
+                return Chroma.from_documents(
+                    documents=batch,
+                    embedding=embedding_model,
+                )
+            else:
+                vector_db.add_documents(documents=batch)
+                return vector_db
+        except Exception as e:
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                wait_time = base_delay * (2 ** (attempt - 1))
+                print(f"   -> Embedding quota reached (attempt {attempt}/{max_retries}). Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise e
+    raise RuntimeError("Failed to generate embeddings after max retries due to Gemini API rate limits.")
+
+
+def _process_pdf(file_path: Path, session_id: str):
+    """Blocking work: parse the PDF, split it, and embed it into Chroma in small batches."""
+    loader = PyPDFLoader(str(file_path))
+    documents = loader.load()
+    if not documents:
+        raise ValueError(
+            "Couldn't extract any text from this PDF. It may be a scanned "
+            "image with no selectable text (OCR isn't supported yet)."
+        )
+
+    # Slightly larger chunks = fewer embedding requests
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=150)
+    chunks = text_splitter.split_documents(documents)
+
+    persist_dir = CHROMA_ROOT / session_id
+    batch_size = 10  # Batch 10 chunks at a time to stay under free tier rate limits
+    vector_db = None
+
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i : i + batch_size]
+        print(f"Indexing batch {i // batch_size + 1} of {(len(chunks) + batch_size - 1) // batch_size}...")
+        
+        if vector_db is None:
+            vector_db = Chroma(
+                collection_name=session_id,
+                embedding_function=embedding_model,
+                persist_directory=str(persist_dir)
+            )
+        
+        vector_db = _add_batch_with_retry(vector_db, batch)
+        time.sleep(1.5)  # Pause between batches to avoid overloading API rate limit
+
+    retriever = vector_db.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": 4, "fetch_k": 10}
+    )
+    return retriever, len(documents)
+
+
+@app.post("/api/upload")
+async def upload_pdf(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    contents = await file.read()
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if len(contents) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Max size is {MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB."
+        )
+
+    _cleanup_expired_sessions()
+
+    session_id = uuid.uuid4().hex
+    saved_path = UPLOAD_DIR / f"{session_id}.pdf"
+    saved_path.write_bytes(contents)
+
+    try:
+        retriever, num_pages = await run_in_threadpool(_process_pdf, saved_path, session_id)
+    except Exception as e:
+        saved_path.unlink(missing_ok=True)
+        shutil.rmtree(CHROMA_ROOT / session_id, ignore_errors=True)
+        print(f"Upload processing error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {e}")
+
+    SESSIONS[session_id] = {
+        "retriever": retriever,
+        "filename": file.filename,
+        "pages": num_pages,
+        "size_bytes": len(contents),
+        "created": time.time(),
+    }
+
+    return {
+        "session_id": session_id,
+        "filename": file.filename,
+        "pages": num_pages,
+        "size_bytes": len(contents),
+    }
+
+
+@app.get("/api/document/{session_id}")
+async def get_document(session_id: str):
+    session = SESSIONS.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Document not found or session expired.")
+    file_path = UPLOAD_DIR / f"{session_id}.pdf"
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Document file missing on server.")
+    return FileResponse(str(file_path), media_type="application/pdf", filename=session["filename"])
+
+
+def invoke_with_retry(prompt, max_attempts=5, base_delay=2):
+    """Calls the LLM, retrying with exponential backoff if overloaded."""
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return llm.invoke(prompt)
+        except Exception as e:
+            last_error = e
+            if "503" in str(e) or "UNAVAILABLE" in str(e) or "429" in str(e):
+                wait = base_delay * (2 ** (attempt - 1))
+                print(f"   -> Model busy/overloaded (attempt {attempt}/{max_attempts}). Retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            raise
+    raise last_error
 
 
 @app.post("/api/chat")
@@ -146,12 +232,16 @@ async def chat_endpoint(request: QueryRequest):
     if len(question) > 2000:
         raise HTTPException(status_code=400, detail="Question is too long (max 2000 characters).")
 
+    session = SESSIONS.get(request.session_id)
+    if not session:
+        raise HTTPException(
+            status_code=404,
+            detail="No document found for this session. Please upload a PDF first."
+        )
+
+    retriever = session["retriever"]
+
     try:
-        # retriever.invoke and invoke_with_retry are both blocking (sync SDK
-        # calls, plus time.sleep on retries). Running them directly inside
-        # this async endpoint would block the whole server for every other
-        # concurrent request. run_in_threadpool offloads them to a worker
-        # thread so the event loop stays free.
         retrieved_docs = await run_in_threadpool(retriever.invoke, question)
         if not retrieved_docs:
             return {"answer": "I could not find the answer in the PDF.", "sources": []}
@@ -191,12 +281,6 @@ Question:
 
 if __name__ == "__main__":
     import uvicorn
-    # Render assigns a random port at runtime via the PORT env var and
-    # routes external traffic to it -- binding to a hardcoded 127.0.0.1:8000
-    # only accepts connections from inside the container itself, so Render's
-    # proxy can never reach it. Binding 0.0.0.0 + $PORT fixes that.
-    # reload=True is a dev-only feature (auto-restarts on file changes) and
-    # should never run in production.
     port = int(os.getenv("PORT", 8000))
     print(f"\n🚀 Ready! Listening on 0.0.0.0:{port}\n")
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)
